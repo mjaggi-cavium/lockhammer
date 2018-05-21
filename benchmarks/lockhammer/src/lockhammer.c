@@ -78,7 +78,6 @@ int main(int argc, char** argv)
                        .nparallel = 0 };
 
     opterr = 0;
-
     while ((i = getopt(argc, argv, "t:a:c:p:")) != -1)
     {
         long optval = 0;
@@ -144,6 +143,11 @@ int main(int argc, char** argv)
     unsigned long hmrdepth[args.nthrds];
     struct timespec tv_time;
 
+    /* Hack: Run one thread less, this is done to move TH0 to Core1,
+     * allowing core 0 to only run main function.
+     */
+    args.nthrds--;
+
     /* Select the FIFO scheduler.  This prevents interruption of the
        lockhammer test threads allowing for more precise measuremnet of
        lock acquisition rate, especially for mutex type locks where
@@ -180,7 +184,7 @@ int main(int argc, char** argv)
         t_args[i].nstart = &start_ns;
         t_args[i].hold = args.ncrit;
         t_args[i].post = args.nparallel;
-
+        fprintf(stderr, "Th#%d \r\n", i);
         pthread_create(&hmr_threads[i], &hmr_attr, hmr, (void*)(&t_args[i]));
     }
 
@@ -253,19 +257,24 @@ void* hmr(void *ptr)
         /* First core to register is a "marshal" who waits for subsequent
            cores to become ready and starts all cores with a write to the
            shared memory location */
+        /* Hack set affinity to Core 1 */
+        int mcore = mycore + 1;
+        CPU_SET(((mcore >> 1)) + ((ncores >> 1) * (mcore & 1)), &affin_mask);
 
-        /* Set affinity to core 0 */
-        CPU_SET(0, &affin_mask);
         sched_setaffinity(0, sizeof(cpu_set_t), &affin_mask);
 
         /* Spin until the appropriate numer of threads have become ready */
+        fprintf(stderr, "b:wait \r\n");
         wait64(&ready_lock, nthrds - 1);
+        fprintf(stderr, "a:wait \r\n");
         clock_gettime(CLOCK_MONOTONIC, &tv_monot_start);
         fetchadd64_release(&sync_lock, 1);
     }
     else {
+        /* Set Affinity to mycore +1 */
+        int mcore = mycore + 1;
         /* Calculate affinity mask for my core and set affinity */
-        CPU_SET(((mycore >> 1)) + ((ncores >> 1) * (mycore & 1)), &affin_mask);
+        CPU_SET(((mcore >> 1)) + ((ncores >> 1) * (mcore & 1)), &affin_mask);
         sched_setaffinity(0, sizeof(cpu_set_t), &affin_mask);
         fetchadd64_release(&ready_lock, 1);
 
